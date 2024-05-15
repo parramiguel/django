@@ -1,6 +1,7 @@
 """
 Tests for django.core.servers.
 """
+
 import errno
 import os
 import socket
@@ -30,7 +31,6 @@ TEST_SETTINGS = {
 
 @override_settings(ROOT_URLCONF="servers.urls", **TEST_SETTINGS)
 class LiveServerBase(LiveServerTestCase):
-
     available_apps = [
         "servers",
         "django.contrib.auth",
@@ -56,7 +56,6 @@ class CloseConnectionTestServer(ThreadedWSGIServer):
 
 
 class CloseConnectionTestLiveServerThread(LiveServerThread):
-
     server_class = CloseConnectionTestServer
 
     def _create_server(self, connections_override=None):
@@ -64,7 +63,6 @@ class CloseConnectionTestLiveServerThread(LiveServerThread):
 
 
 class LiveServerTestCloseConnectionTest(LiveServerBase):
-
     server_thread_class = CloseConnectionTestLiveServerThread
 
     @classmethod
@@ -118,6 +116,7 @@ class LiveServerInMemoryDatabaseLockTest(LiveServerBase):
         connection.
         """
         conn = self.server_thread.connections_override[DEFAULT_DB_ALIAS]
+        source_connection = conn.connection
         # Open a connection to the database.
         conn.connect()
         # Create a transaction to lock the database.
@@ -131,6 +130,7 @@ class LiveServerInMemoryDatabaseLockTest(LiveServerBase):
         finally:
             # Release the transaction.
             cursor.execute("ROLLBACK")
+            source_connection.close()
 
 
 class FailingLiveServerThread(LiveServerThread):

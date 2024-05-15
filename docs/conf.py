@@ -9,6 +9,7 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
+import functools
 import sys
 from os.path import abspath, dirname, join
 
@@ -29,6 +30,10 @@ sys.path.insert(1, dirname(dirname(abspath(__file__))))
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 sys.path.append(abspath(join(dirname(__file__), "_ext")))
 
+# Use the module to GitHub url resolver, but import it after the _ext directoy
+# it lives in has been added to sys.path.
+import github_links  # NOQA
+
 # -- General configuration -----------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
@@ -40,8 +45,8 @@ extensions = [
     "djangodocs",
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.viewcode",
     "sphinx.ext.autosectionlabel",
+    "sphinx.ext.linkcode",
 ]
 
 # AutosectionLabel settings.
@@ -54,8 +59,8 @@ autosectionlabel_maxdepth = 2
 linkcheck_ignore = [
     # Special-use addresses and domain names. (RFC 6761/6890)
     r"^https?://(?:127\.0\.0\.1|\[::1\])(?::\d+)?/",
-    r"^https?://(?:[^/\.]+\.)*example\.(?:com|net|org)(?::\d+)?/",
-    r"^https?://(?:[^/\.]+\.)*(?:example|invalid|localhost|test)(?::\d+)?/",
+    r"^https?://(?:[^/.]+\.)*example\.(?:com|net|org)(?::\d+)?/",
+    r"^https?://(?:[^/.]+\.)*(?:example|invalid|localhost|test)(?::\d+)?/",
     # Pages that are inaccessible because they require authentication.
     r"^https://github\.com/[^/]+/[^/]+/fork",
     r"^https://code\.djangoproject\.com/github/login",
@@ -111,7 +116,7 @@ copyright = "Django Software Foundation and contributors"
 # built documents.
 #
 # The short X.Y version.
-version = "5.0"
+version = "5.1"
 # The full version, including alpha/beta/rc tags.
 try:
     from django import VERSION, get_version
@@ -128,12 +133,13 @@ else:
     release = django_release()
 
 # The "development version" of Django
-django_next_version = "5.0"
+django_next_version = "5.1"
 
 extlinks = {
     "bpo": ("https://bugs.python.org/issue?@action=redirect&bpo=%s", "bpo-%s"),
     "commit": ("https://github.com/django/django/commit/%s", "%s"),
     "cve": ("https://nvd.nist.gov/vuln/detail/CVE-%s", "CVE-%s"),
+    "pypi": ("https://pypi.org/project/%s/", "%s"),
     # A file or directory. GitHub redirects from blob to tree if needed.
     "source": ("https://github.com/django/django/blob/main/%s", "%s"),
     "ticket": ("https://code.djangoproject.com/ticket/%s", "#%s"),
@@ -404,7 +410,7 @@ epub_cover = ("", "epub-cover.html")
 # The format is a list of tuples containing the path and title.
 # epub_pre_files = []
 
-# HTML files shat should be inserted after the pages created by sphinx.
+# HTML files that should be inserted after the pages created by sphinx.
 # The format is a list of tuples containing the path and title.
 # epub_post_files = []
 
@@ -431,3 +437,9 @@ epub_cover = ("", "epub-cover.html")
 
 # If false, no index is generated.
 # epub_use_index = True
+
+linkcode_resolve = functools.partial(
+    github_links.github_linkcode_resolve,
+    version=version,
+    next_version=django_next_version,
+)

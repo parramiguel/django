@@ -5,9 +5,8 @@ from django.core.checks.model_checks import _check_lazy_references
 from django.db import connection, connections, models
 from django.db.models.functions import Abs, Lower, Round
 from django.db.models.signals import post_init
-from django.test import SimpleTestCase, TestCase, ignore_warnings, skipUnlessDBFeature
+from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
 from django.test.utils import isolate_apps, override_settings, register_lookup
-from django.utils.deprecation import RemovedInDjango51Warning
 
 
 class EmptyRouter:
@@ -29,134 +28,6 @@ def get_max_column_name_length():
     return (allowed_len, db_alias)
 
 
-@isolate_apps("invalid_models_tests")
-@ignore_warnings(category=RemovedInDjango51Warning)
-class IndexTogetherTests(SimpleTestCase):
-    def test_non_iterable(self):
-        class Model(models.Model):
-            class Meta:
-                index_together = 42
-
-        self.assertEqual(
-            Model.check(),
-            [
-                Error(
-                    "'index_together' must be a list or tuple.",
-                    obj=Model,
-                    id="models.E008",
-                ),
-            ],
-        )
-
-    def test_non_list(self):
-        class Model(models.Model):
-            class Meta:
-                index_together = "not-a-list"
-
-        self.assertEqual(
-            Model.check(),
-            [
-                Error(
-                    "'index_together' must be a list or tuple.",
-                    obj=Model,
-                    id="models.E008",
-                ),
-            ],
-        )
-
-    def test_list_containing_non_iterable(self):
-        class Model(models.Model):
-            class Meta:
-                index_together = [("a", "b"), 42]
-
-        self.assertEqual(
-            Model.check(),
-            [
-                Error(
-                    "All 'index_together' elements must be lists or tuples.",
-                    obj=Model,
-                    id="models.E009",
-                ),
-            ],
-        )
-
-    def test_pointing_to_missing_field(self):
-        class Model(models.Model):
-            class Meta:
-                index_together = [["missing_field"]]
-
-        self.assertEqual(
-            Model.check(),
-            [
-                Error(
-                    "'index_together' refers to the nonexistent field 'missing_field'.",
-                    obj=Model,
-                    id="models.E012",
-                ),
-            ],
-        )
-
-    def test_pointing_to_non_local_field(self):
-        class Foo(models.Model):
-            field1 = models.IntegerField()
-
-        class Bar(Foo):
-            field2 = models.IntegerField()
-
-            class Meta:
-                index_together = [["field2", "field1"]]
-
-        self.assertEqual(
-            Bar.check(),
-            [
-                Error(
-                    "'index_together' refers to field 'field1' which is not "
-                    "local to model 'Bar'.",
-                    hint="This issue may be caused by multi-table inheritance.",
-                    obj=Bar,
-                    id="models.E016",
-                ),
-            ],
-        )
-
-    def test_pointing_to_m2m_field(self):
-        class Model(models.Model):
-            m2m = models.ManyToManyField("self")
-
-            class Meta:
-                index_together = [["m2m"]]
-
-        self.assertEqual(
-            Model.check(),
-            [
-                Error(
-                    "'index_together' refers to a ManyToManyField 'm2m', but "
-                    "ManyToManyFields are not permitted in 'index_together'.",
-                    obj=Model,
-                    id="models.E013",
-                ),
-            ],
-        )
-
-    def test_pointing_to_fk(self):
-        class Foo(models.Model):
-            pass
-
-        class Bar(models.Model):
-            foo_1 = models.ForeignKey(
-                Foo, on_delete=models.CASCADE, related_name="bar_1"
-            )
-            foo_2 = models.ForeignKey(
-                Foo, on_delete=models.CASCADE, related_name="bar_2"
-            )
-
-            class Meta:
-                index_together = [["foo_1_id", "foo_2"]]
-
-        self.assertEqual(Bar.check(), [])
-
-
-# unique_together tests are very similar to index_together tests.
 @isolate_apps("invalid_models_tests")
 class UniqueTogetherTests(SimpleTestCase):
     def test_non_iterable(self):
@@ -565,7 +436,7 @@ class IndexesTests(TestCase):
             fk_2 = models.ForeignKey(Target, models.CASCADE, related_name="target_2")
 
             class Meta:
-                constraints = [
+                indexes = [
                     models.Index(
                         fields=["id"],
                         include=["fk_1_id", "fk_2"],
@@ -747,6 +618,7 @@ class FieldNamesTests(TestCase):
         #13711 -- Model check for long M2M column names when database has
         column name length limits.
         """
+
         # A model with very long name which will be used to set relations to.
         class VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz(
             models.Model
@@ -1064,6 +936,31 @@ class ShadowingFieldsTests(SimpleTestCase):
                     "The field 'clash' clashes with the field 'clash' "
                     "from model 'invalid_models_tests.grandparent'.",
                     obj=GrandChild._meta.get_field("clash"),
+                    id="models.E006",
+                )
+            ],
+        )
+
+    def test_diamond_mti_common_parent(self):
+        class GrandParent(models.Model):
+            pass
+
+        class Parent(GrandParent):
+            pass
+
+        class Child(Parent):
+            pass
+
+        class MTICommonParentModel(Child, GrandParent):
+            pass
+
+        self.assertEqual(
+            MTICommonParentModel.check(),
+            [
+                Error(
+                    "The field 'grandparent_ptr' clashes with the field "
+                    "'grandparent_ptr' from model 'invalid_models_tests.parent'.",
+                    obj=MTICommonParentModel,
                     id="models.E006",
                 )
             ],
@@ -1445,6 +1342,17 @@ class OtherModelTests(SimpleTestCase):
                 )
             ],
         )
+
+    def test_inherited_overriden_property_no_clash(self):
+        class Cheese:
+            @property
+            def filling_id(self):
+                pass
+
+        class Sandwich(Cheese, models.Model):
+            filling = models.ForeignKey("self", models.CASCADE)
+
+        self.assertEqual(Sandwich.check(), [])
 
     def test_single_primary_key(self):
         class Model(models.Model):
@@ -1958,7 +1866,9 @@ class ConstraintsTests(TestCase):
 
             class Meta:
                 constraints = [
-                    models.CheckConstraint(check=models.Q(age__gte=18), name="is_adult")
+                    models.CheckConstraint(
+                        condition=models.Q(age__gte=18), name="is_adult"
+                    )
                 ]
 
         errors = Model.check(databases=self.databases)
@@ -1983,7 +1893,9 @@ class ConstraintsTests(TestCase):
             class Meta:
                 required_db_features = {"supports_table_check_constraints"}
                 constraints = [
-                    models.CheckConstraint(check=models.Q(age__gte=18), name="is_adult")
+                    models.CheckConstraint(
+                        condition=models.Q(age__gte=18), name="is_adult"
+                    )
                 ]
 
         self.assertEqual(Model.check(databases=self.databases), [])
@@ -1995,21 +1907,24 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name",
-                        check=models.Q(missing_field=2),
+                        condition=models.Q(missing_field=2),
                     ),
                 ]
 
         self.assertEqual(
             Model.check(databases=self.databases),
-            [
-                Error(
-                    "'constraints' refers to the nonexistent field 'missing_field'.",
-                    obj=Model,
-                    id="models.E012",
-                ),
-            ]
-            if connection.features.supports_table_check_constraints
-            else [],
+            (
+                [
+                    Error(
+                        "'constraints' refers to the nonexistent field "
+                        "'missing_field'.",
+                        obj=Model,
+                        id="models.E012",
+                    ),
+                ]
+                if connection.features.supports_table_check_constraints
+                else []
+            ),
         )
 
     @skipUnlessDBFeature("supports_table_check_constraints")
@@ -2019,7 +1934,7 @@ class ConstraintsTests(TestCase):
 
             class Meta:
                 constraints = [
-                    models.CheckConstraint(name="name", check=models.Q(parents=3)),
+                    models.CheckConstraint(name="name", condition=models.Q(parents=3)),
                 ]
 
         self.assertEqual(
@@ -2042,7 +1957,7 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name",
-                        check=models.Q(model__isnull=True),
+                        condition=models.Q(model__isnull=True),
                     ),
                 ]
 
@@ -2064,7 +1979,7 @@ class ConstraintsTests(TestCase):
 
             class Meta:
                 constraints = [
-                    models.CheckConstraint(name="name", check=models.Q(m2m=2)),
+                    models.CheckConstraint(name="name", condition=models.Q(m2m=2)),
                 ]
 
         self.assertEqual(
@@ -2092,7 +2007,7 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name",
-                        check=models.Q(fk_1_id=2) | models.Q(fk_2=2),
+                        condition=models.Q(fk_1_id=2) | models.Q(fk_2=2),
                     ),
                 ]
 
@@ -2107,7 +2022,7 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name",
-                        check=models.Q(pk__gt=5) & models.Q(age__gt=models.F("pk")),
+                        condition=models.Q(pk__gt=5) & models.Q(age__gt=models.F("pk")),
                     ),
                 ]
 
@@ -2123,7 +2038,7 @@ class ConstraintsTests(TestCase):
 
             class Meta:
                 constraints = [
-                    models.CheckConstraint(name="name", check=models.Q(field1=1)),
+                    models.CheckConstraint(name="name", condition=models.Q(field1=1)),
                 ]
 
         self.assertEqual(
@@ -2153,20 +2068,21 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name1",
-                        check=models.Q(
+                        condition=models.Q(
                             field1__lt=models.F("parent__field1")
                             + models.F("parent__field2")
                         ),
                     ),
                     models.CheckConstraint(
-                        name="name2", check=models.Q(name=Lower("parent__name"))
+                        name="name2", condition=models.Q(name=Lower("parent__name"))
                     ),
                     models.CheckConstraint(
-                        name="name3", check=models.Q(parent__field3=models.F("field1"))
+                        name="name3",
+                        condition=models.Q(parent__field3=models.F("field1")),
                     ),
                     models.CheckConstraint(
                         name="name4",
-                        check=models.Q(name=Lower("previous__name")),
+                        condition=models.Q(name=Lower("previous__name")),
                     ),
                 ]
 
@@ -2200,7 +2116,7 @@ class ConstraintsTests(TestCase):
                 constraints = [
                     models.CheckConstraint(
                         name="name",
-                        check=models.Q(
+                        condition=models.Q(
                             (
                                 models.Q(name="test")
                                 & models.Q(field1__lt=models.F("parent__field1"))
@@ -2236,16 +2152,18 @@ class ConstraintsTests(TestCase):
             class Meta:
                 required_db_features = {"supports_table_check_constraints"}
                 constraints = [
-                    models.CheckConstraint(check=models.Q(id__gt=0), name="q_check"),
                     models.CheckConstraint(
-                        check=models.ExpressionWrapper(
+                        condition=models.Q(id__gt=0), name="q_check"
+                    ),
+                    models.CheckConstraint(
+                        condition=models.ExpressionWrapper(
                             models.Q(price__gt=20),
                             output_field=models.BooleanField(),
                         ),
                         name="expression_wrapper_check",
                     ),
                     models.CheckConstraint(
-                        check=models.expressions.RawSQL(
+                        condition=models.expressions.RawSQL(
                             "id = 0",
                             params=(),
                             output_field=models.BooleanField(),
@@ -2253,7 +2171,7 @@ class ConstraintsTests(TestCase):
                         name="raw_sql_check",
                     ),
                     models.CheckConstraint(
-                        check=models.Q(
+                        condition=models.Q(
                             models.ExpressionWrapper(
                                 models.Q(
                                     models.expressions.RawSQL(
@@ -2355,15 +2273,18 @@ class ConstraintsTests(TestCase):
 
         self.assertEqual(
             Model.check(databases=self.databases),
-            [
-                Error(
-                    "'constraints' refers to the nonexistent field 'missing_field'.",
-                    obj=Model,
-                    id="models.E012",
-                ),
-            ]
-            if connection.features.supports_partial_indexes
-            else [],
+            (
+                [
+                    Error(
+                        "'constraints' refers to the nonexistent field "
+                        "'missing_field'.",
+                        obj=Model,
+                        id="models.E012",
+                    ),
+                ]
+                if connection.features.supports_partial_indexes
+                else []
+            ),
         )
 
     def test_unique_constraint_condition_pointing_to_joined_fields(self):
@@ -2383,15 +2304,17 @@ class ConstraintsTests(TestCase):
 
         self.assertEqual(
             Model.check(databases=self.databases),
-            [
-                Error(
-                    "'constraints' refers to the joined field 'parent__age__lt'.",
-                    obj=Model,
-                    id="models.E041",
-                )
-            ]
-            if connection.features.supports_partial_indexes
-            else [],
+            (
+                [
+                    Error(
+                        "'constraints' refers to the joined field 'parent__age__lt'.",
+                        obj=Model,
+                        id="models.E041",
+                    )
+                ]
+                if connection.features.supports_partial_indexes
+                else []
+            ),
         )
 
     def test_unique_constraint_pointing_to_reverse_o2o(self):
@@ -2410,15 +2333,17 @@ class ConstraintsTests(TestCase):
 
         self.assertEqual(
             Model.check(databases=self.databases),
-            [
-                Error(
-                    "'constraints' refers to the nonexistent field 'model'.",
-                    obj=Model,
-                    id="models.E012",
-                ),
-            ]
-            if connection.features.supports_partial_indexes
-            else [],
+            (
+                [
+                    Error(
+                        "'constraints' refers to the nonexistent field 'model'.",
+                        obj=Model,
+                        id="models.E012",
+                    ),
+                ]
+                if connection.features.supports_partial_indexes
+                else []
+            ),
         )
 
     def test_deferrable_unique_constraint(self):
@@ -2724,6 +2649,52 @@ class ConstraintsTests(TestCase):
                     models.UniqueConstraint(Lower("name"), name="lower_name_unq"),
                 ]
                 required_db_features = {"supports_expression_indexes"}
+
+        self.assertEqual(Model.check(databases=self.databases), [])
+
+    def test_unique_constraint_nulls_distinct(self):
+        class Model(models.Model):
+            name = models.CharField(max_length=10)
+
+            class Meta:
+                constraints = [
+                    models.UniqueConstraint(
+                        fields=["name"],
+                        name="name_uq_distinct_null",
+                        nulls_distinct=True,
+                    ),
+                ]
+
+        warn = Warning(
+            f"{connection.display_name} does not support unique constraints with nulls "
+            "distinct.",
+            hint=(
+                "A constraint won't be created. Silence this warning if you don't care "
+                "about it."
+            ),
+            obj=Model,
+            id="models.W047",
+        )
+        expected = (
+            []
+            if connection.features.supports_nulls_distinct_unique_constraints
+            else [warn]
+        )
+        self.assertEqual(Model.check(databases=self.databases), expected)
+
+    def test_unique_constraint_nulls_distinct_required_db_features(self):
+        class Model(models.Model):
+            name = models.CharField(max_length=10)
+
+            class Meta:
+                constraints = [
+                    models.UniqueConstraint(
+                        fields=["name"],
+                        name="name_uq_distinct_null",
+                        nulls_distinct=True,
+                    ),
+                ]
+                required_db_features = {"supports_nulls_distinct_unique_constraints"}
 
         self.assertEqual(Model.check(databases=self.databases), [])
 

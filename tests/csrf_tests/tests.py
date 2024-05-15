@@ -43,7 +43,6 @@ MASKED_TEST_SECRET2 = "2JgchWvM1tpxT2lfz9aydoXW9yT1DN3NdLiejYxOOlzzV4nhBbYqmqZYb
 
 
 class CsrfFunctionTestMixin:
-
     # This method depends on _unmask_cipher_token() being correct.
     def assertMaskedSecretCorrect(self, masked_secret, secret):
         """Test that a string is a valid masked version of a secret."""
@@ -858,7 +857,7 @@ class CsrfViewMiddlewareTestMixin(CsrfFunctionTestMixin):
         """
         ensure_csrf_cookie() doesn't log warnings (#19436).
         """
-        with self.assertNoLogs("django.request", "WARNING"):
+        with self.assertNoLogs("django.security.csrf", "WARNING"):
             req = self._get_request()
             ensure_csrf_cookie_view(req)
 

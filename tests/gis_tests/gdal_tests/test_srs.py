@@ -1,7 +1,4 @@
-from unittest import skipIf
-
 from django.contrib.gis.gdal import (
-    GDAL_VERSION,
     AxisOrder,
     CoordTransform,
     GDALException,
@@ -35,7 +32,11 @@ srlist = (
         ang_name="degree",
         lin_units=1.0,
         ang_units=0.0174532925199,
-        auth={"GEOGCS": ("EPSG", "4326"), "spheroid": ("EPSG", "7030")},
+        auth={
+            None: ("EPSG", "4326"),  # Top-level authority.
+            "GEOGCS": ("EPSG", "4326"),
+            "spheroid": ("EPSG", "7030"),
+        },
         attr=(
             ("DATUM", "WGS_1984"),
             (("SPHEROID", 1), "6378137"),
@@ -64,6 +65,7 @@ srlist = (
         lin_units=1.0,
         ang_units=0.0174532925199,
         auth={
+            None: ("EPSG", "32140"),  # Top-level authority.
             "PROJCS": ("EPSG", "32140"),
             "spheroid": ("EPSG", "7019"),
             "unit": ("EPSG", "9001"),
@@ -97,7 +99,10 @@ srlist = (
         ang_name="Degree",
         lin_units=0.3048006096012192,
         ang_units=0.0174532925199,
-        auth={"PROJCS": (None, None)},
+        auth={
+            None: (None, None),  # Top-level authority.
+            "PROJCS": (None, None),
+        },
         attr=(
             ("PROJCS|GeOgCs|spheroid", "GRS 1980"),
             (("projcs", 9), "UNIT"),
@@ -350,7 +355,6 @@ class SpatialRefTest(SimpleTestCase):
             self.assertIn("Langschoß", srs.pretty_wkt)
             self.assertIn("Langschoß", srs.xml)
 
-    @skipIf(GDAL_VERSION < (3, 0), "GDAL >= 3.0 is required")
     def test_axis_order(self):
         wgs84_trad = SpatialReference(4326, axis_order=AxisOrder.TRADITIONAL)
         wgs84_auth = SpatialReference(4326, axis_order=AxisOrder.AUTHORITY)
@@ -372,12 +376,6 @@ class SpatialRefTest(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, msg):
             SpatialReference(4326, axis_order="other")
 
-    @skipIf(GDAL_VERSION > (3, 0), "GDAL < 3.0 doesn't support authority.")
-    def test_axis_order_non_traditional_invalid(self):
-        msg = "AxisOrder.AUTHORITY is not supported in GDAL < 3.0."
-        with self.assertRaisesMessage(ValueError, msg):
-            SpatialReference(4326, axis_order=AxisOrder.AUTHORITY)
-
     def test_esri(self):
         srs = SpatialReference("NAD83")
         pre_esri_wkt = srs.wkt
@@ -386,3 +384,10 @@ class SpatialRefTest(SimpleTestCase):
         self.assertIn('DATUM["D_North_American_1983"', srs.wkt)
         srs.from_esri()
         self.assertIn('DATUM["North_American_Datum_1983"', srs.wkt)
+
+    def test_srid(self):
+        """The srid property returns top-level authority code."""
+        for s in srlist:
+            if hasattr(s, "epsg"):
+                srs = SpatialReference(s.wkt)
+                self.assertEqual(srs.srid, s.epsg)

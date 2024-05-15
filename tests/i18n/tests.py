@@ -1501,6 +1501,14 @@ class MiscTests(SimpleTestCase):
             ("de;q=0.", [("de", 0.0)]),
             ("en; q=1,", [("en", 1.0)]),
             ("en; q=1.0, * ; q=0.5", [("en", 1.0), ("*", 0.5)]),
+            (
+                "en" + "-x" * 20,
+                [("en-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x", 1.0)],
+            ),
+            (
+                ", ".join(["en; q=1.0"] * 20),
+                [("en", 1.0)] * 20,
+            ),
             # Bad headers
             ("en-gb;q=1.0000", []),
             ("en;q=0.1234", []),
@@ -1517,6 +1525,10 @@ class MiscTests(SimpleTestCase):
             ("", []),
             ("en;q=1e0", []),
             ("en-au;q=１.０", []),
+            # Invalid as language-range value too long.
+            ("xxxxxxxx" + "-xxxxxxxx" * 500, []),
+            # Header value too long, only parse up to limit.
+            (", ".join(["en; q=1.0"] * 500), [("en", 1.0)] * 45),
         ]
         for value, expected in tests:
             with self.subTest(value=value):
@@ -1744,10 +1756,7 @@ class ResolutionOrderI18NTests(SimpleTestCase):
     def setUp(self):
         super().setUp()
         activate("de")
-
-    def tearDown(self):
-        deactivate()
-        super().tearDown()
+        self.addCleanup(deactivate)
 
     def assertGettext(self, msgid, msgstr):
         result = gettext(msgid)
@@ -1904,26 +1913,18 @@ class UnprefixedDefaultLanguageTests(SimpleTestCase):
         response = self.client.get("/simple/")
         self.assertEqual(response.content, b"Yes")
 
+    @override_settings(LANGUAGE_CODE="en-us")
+    def test_default_lang_fallback_without_prefix(self):
+        response = self.client.get("/simple/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"Yes")
+
     def test_other_lang_with_prefix(self):
         response = self.client.get("/fr/simple/")
         self.assertEqual(response.content, b"Oui")
 
-    def test_unprefixed_language_with_accept_language(self):
-        """'Accept-Language' is respected."""
-        response = self.client.get("/simple/", headers={"accept-language": "fr"})
-        self.assertRedirects(response, "/fr/simple/")
-
-    def test_unprefixed_language_with_cookie_language(self):
-        """A language set in the cookies is respected."""
-        self.client.cookies.load({settings.LANGUAGE_COOKIE_NAME: "fr"})
-        response = self.client.get("/simple/")
-        self.assertRedirects(response, "/fr/simple/")
-
-    def test_unprefixed_language_with_non_valid_language(self):
-        response = self.client.get("/simple/", headers={"accept-language": "fi"})
-        self.assertEqual(response.content, b"Yes")
-        self.client.cookies.load({settings.LANGUAGE_COOKIE_NAME: "fi"})
-        response = self.client.get("/simple/")
+    def test_unprefixed_language_other_than_accept_language(self):
+        response = self.client.get("/simple/", HTTP_ACCEPT_LANGUAGE="fr")
         self.assertEqual(response.content, b"Yes")
 
     def test_page_with_dash(self):
@@ -1999,7 +2000,10 @@ class CountrySpecificLanguageTests(SimpleTestCase):
 
     def test_get_language_from_request_null(self):
         lang = trans_null.get_language_from_request(None)
-        self.assertEqual(lang, None)
+        self.assertEqual(lang, "en")
+        with override_settings(LANGUAGE_CODE="de"):
+            lang = trans_null.get_language_from_request(None)
+            self.assertEqual(lang, "de")
 
     def test_specific_language_codes(self):
         # issue 11915

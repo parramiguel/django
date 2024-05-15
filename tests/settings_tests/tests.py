@@ -24,7 +24,6 @@ from django.urls import clear_script_prefix, set_script_prefix
     ITEMS=["a", "c", "e"], ITEMS_OUTER=[1, 2, 3], TEST="override", TEST_OUTER="outer"
 )
 class FullyDecoratedTranTestCase(TransactionTestCase):
-
     available_apps = []
 
     def test_override(self):
@@ -157,9 +156,7 @@ class SettingsTests(SimpleTestCase):
     def setUp(self):
         self.testvalue = None
         signals.setting_changed.connect(self.signal_callback)
-
-    def tearDown(self):
-        signals.setting_changed.disconnect(self.signal_callback)
+        self.addCleanup(signals.setting_changed.disconnect, self.signal_callback)
 
     def signal_callback(self, sender, setting, value, **kwargs):
         if setting == "TEST":

@@ -1,6 +1,5 @@
 from types import NoneType
 
-from django.contrib.postgres.indexes import OpClass
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, NotSupportedError
 from django.db.backends.ddl_references import Expressions, Statement, Table
@@ -32,6 +31,7 @@ class ExclusionConstraint(BaseConstraint):
         condition=None,
         deferrable=None,
         include=None,
+        violation_error_code=None,
         violation_error_message=None,
     ):
         if index_type and index_type.lower() not in {"gist", "spgist"}:
@@ -60,7 +60,11 @@ class ExclusionConstraint(BaseConstraint):
         self.condition = condition
         self.deferrable = deferrable
         self.include = tuple(include) if include else ()
-        super().__init__(name=name, violation_error_message=violation_error_message)
+        super().__init__(
+            name=name,
+            violation_error_code=violation_error_code,
+            violation_error_message=violation_error_message,
+        )
 
     def _get_expressions(self, schema_editor, query):
         expressions = []
@@ -71,6 +75,14 @@ class ExclusionConstraint(BaseConstraint):
             expression.set_wrapper_classes(schema_editor.connection)
             expressions.append(expression)
         return ExpressionList(*expressions).resolve_expression(query)
+
+    def _check(self, model, connection):
+        references = set()
+        for expr, _ in self.expressions:
+            if isinstance(expr, str):
+                expr = F(expr)
+            references.update(model._get_expr_references(expr))
+        return self._check_references(model, references)
 
     def _get_condition_sql(self, compiler, schema_editor, query):
         if self.condition is None:
@@ -149,12 +161,13 @@ class ExclusionConstraint(BaseConstraint):
                 and self.condition == other.condition
                 and self.deferrable == other.deferrable
                 and self.include == other.include
+                and self.violation_error_code == other.violation_error_code
                 and self.violation_error_message == other.violation_error_message
             )
         return super().__eq__(other)
 
     def __repr__(self):
-        return "<%s: index_type=%s expressions=%s name=%s%s%s%s>" % (
+        return "<%s: index_type=%s expressions=%s name=%s%s%s%s%s%s>" % (
             self.__class__.__qualname__,
             repr(self.index_type),
             repr(self.expressions),
@@ -162,6 +175,17 @@ class ExclusionConstraint(BaseConstraint):
             "" if self.condition is None else " condition=%s" % self.condition,
             "" if self.deferrable is None else " deferrable=%r" % self.deferrable,
             "" if not self.include else " include=%s" % repr(self.include),
+            (
+                ""
+                if self.violation_error_code is None
+                else " violation_error_code=%r" % self.violation_error_code
+            ),
+            (
+                ""
+                if self.violation_error_message is None
+                or self.violation_error_message == self.default_violation_error_message
+                else " violation_error_message=%r" % self.violation_error_message
+            ),
         )
 
     def validate(self, model, instance, exclude=None, using=DEFAULT_DB_ALIAS):
@@ -183,12 +207,10 @@ class ExclusionConstraint(BaseConstraint):
                         if isinstance(expr, F) and expr.name in exclude:
                             return
             rhs_expression = expression.replace_expressions(replacements)
-            # Remove OpClass because it only has sense during the constraint
-            # creation.
-            if isinstance(expression, OpClass):
-                expression = expression.get_source_expressions()[0]
-            if isinstance(rhs_expression, OpClass):
-                rhs_expression = rhs_expression.get_source_expressions()[0]
+            if hasattr(expression, "get_expression_for_validation"):
+                expression = expression.get_expression_for_validation()
+            if hasattr(rhs_expression, "get_expression_for_validation"):
+                rhs_expression = rhs_expression.get_expression_for_validation()
             lookup = PostgresOperatorLookup(lhs=expression, rhs=rhs_expression)
             lookup.postgres_operator = operator
             lookups.append(lookup)
@@ -198,9 +220,13 @@ class ExclusionConstraint(BaseConstraint):
             queryset = queryset.exclude(pk=model_class_pk)
         if not self.condition:
             if queryset.exists():
-                raise ValidationError(self.get_violation_error_message())
+                raise ValidationError(
+                    self.get_violation_error_message(), code=self.violation_error_code
+                )
         else:
             if (self.condition & Exists(queryset.filter(self.condition))).check(
                 replacement_map, using=using
             ):
-                raise ValidationError(self.get_violation_error_message())
+                raise ValidationError(
+                    self.get_violation_error_message(), code=self.violation_error_code
+                )

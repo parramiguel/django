@@ -10,7 +10,7 @@ from django.core import checks, exceptions, serializers, validators
 from django.core.exceptions import FieldError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models
-from django.db.models.expressions import Exists, OuterRef, RawSQL, Value
+from django.db.models.expressions import Exists, F, OuterRef, RawSQL, Value
 from django.db.models.functions import Cast, JSONObject, Upper
 from django.test import TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.test.utils import isolate_apps
@@ -465,10 +465,19 @@ class TestQuerying(PostgreSQLTestCase):
                     {"field__0": 20, "arrayagg": [self.objs[3].pk]},
                 ],
             )
-        alias = connection.ops.quote_name("field__0")
         sql = ctx[0]["sql"]
-        self.assertIn("GROUP BY 1", sql)
-        self.assertIn(f"ORDER BY {alias}", sql)
+        self.assertIn("GROUP BY 2", sql)
+        self.assertIn("ORDER BY 2", sql)
+
+    def test_order_by_arrayagg_index(self):
+        qs = (
+            NullableIntegerArrayModel.objects.values("order")
+            .annotate(ids=ArrayAgg("id"))
+            .order_by("-ids__0")
+        )
+        self.assertQuerySetEqual(
+            qs, [{"order": obj.order, "ids": [obj.id]} for obj in reversed(self.objs)]
+        )
 
     def test_index(self):
         self.assertSequenceEqual(
@@ -584,6 +593,40 @@ class TestQuerying(PostgreSQLTestCase):
             qs.values_list("first_two", flat=True),
             [None, [1], [2], [2, 3], [20, 30]],
         )
+
+    def test_slicing_of_f_expressions(self):
+        tests = [
+            (F("field")[:2], [1, 2]),
+            (F("field")[2:], [3, 4]),
+            (F("field")[1:3], [2, 3]),
+            (F("field")[3], [4]),
+            (F("field")[:3][1:], [2, 3]),  # Nested slicing.
+            (F("field")[:3][1], [2]),  # Slice then index.
+        ]
+        for expression, expected in tests:
+            with self.subTest(expression=expression, expected=expected):
+                instance = IntegerArrayModel.objects.create(field=[1, 2, 3, 4])
+                instance.field = expression
+                instance.save()
+                instance.refresh_from_db()
+                self.assertEqual(instance.field, expected)
+
+    def test_slicing_of_f_expressions_with_annotate(self):
+        IntegerArrayModel.objects.create(field=[1, 2, 3])
+        annotated = IntegerArrayModel.objects.annotate(
+            first_two=F("field")[:2],
+            after_two=F("field")[2:],
+            random_two=F("field")[1:3],
+        ).get()
+        self.assertEqual(annotated.first_two, [1, 2])
+        self.assertEqual(annotated.after_two, [3])
+        self.assertEqual(annotated.random_two, [2, 3])
+
+    def test_slicing_of_f_expressions_with_len(self):
+        queryset = NullableIntegerArrayModel.objects.annotate(
+            subarray=F("field")[:1]
+        ).filter(field__len=F("subarray__len"))
+        self.assertSequenceEqual(queryset, self.objs[:2])
 
     def test_usage_in_subquery(self):
         self.assertSequenceEqual(
@@ -864,7 +907,6 @@ class TestChecks(PostgreSQLSimpleTestCase):
 
 @unittest.skipUnless(connection.vendor == "postgresql", "PostgreSQL specific tests")
 class TestMigrations(TransactionTestCase):
-
     available_apps = ["postgres_tests"]
 
     def test_deconstruct(self):
@@ -991,6 +1033,13 @@ class TestValidation(PostgreSQLSimpleTestCase):
             cm.exception.messages[0],
             "List contains 4 items, it should contain no more than 3.",
         )
+
+    def test_with_size_singular(self):
+        field = ArrayField(models.IntegerField(), size=1)
+        field.clean([1], None)
+        msg = "List contains 2 items, it should contain no more than 1."
+        with self.assertRaisesMessage(exceptions.ValidationError, msg):
+            field.clean([1, 2], None)
 
     def test_nested_array_mismatch(self):
         field = ArrayField(ArrayField(models.IntegerField()))
@@ -1133,6 +1182,13 @@ class TestSimpleFormField(PostgreSQLSimpleTestCase):
             cm.exception.messages[0],
             "List contains 3 items, it should contain no fewer than 4.",
         )
+
+    def test_min_length_singular(self):
+        field = SimpleArrayField(forms.IntegerField(), min_length=2)
+        field.clean([1, 2])
+        msg = "List contains 1 item, it should contain no fewer than 2."
+        with self.assertRaisesMessage(exceptions.ValidationError, msg):
+            field.clean([1])
 
     def test_required(self):
         field = SimpleArrayField(forms.CharField(), required=True)

@@ -3,6 +3,7 @@ A series of tests to establish that the command-line management tools work as
 advertised - especially with regards to the handling of the
 DJANGO_SETTINGS_MODULE and default settings.py files.
 """
+
 import os
 import re
 import shutil
@@ -32,6 +33,7 @@ from django.db.migrations.recorder import MigrationRecorder
 from django.test import LiveServerTestCase, SimpleTestCase, TestCase, override_settings
 from django.test.utils import captured_stderr, captured_stdout
 from django.urls import path
+from django.utils.version import PY313
 from django.views.static import serve
 
 from . import urls
@@ -757,7 +759,9 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
         with open(os.path.join(app_path, "apps.py"), encoding="utf8") as f:
             content = f.read()
             self.assertIn("class こんにちはConfig(AppConfig)", content)
-            self.assertIn('name = "こんにちは"' if HAS_BLACK else "name = 'こんにちは'", content)
+            self.assertIn(
+                'name = "こんにちは"' if HAS_BLACK else "name = 'こんにちは'", content
+            )
 
     def test_builtin_command(self):
         """
@@ -1585,18 +1589,21 @@ class ManageRunserver(SimpleTestCase):
         call_command(self.cmd, addrport="7000")
         self.assertServerSettings("127.0.0.1", "7000")
 
-    @mock.patch("django.core.management.commands.runserver.run")
-    @mock.patch("django.core.management.base.BaseCommand.check_migrations")
-    def test_zero_ip_addr(self, *mocked_objects):
-        call_command(
-            "runserver",
-            addrport="0:8000",
-            use_reloader=False,
-            skip_checks=True,
-            stdout=self.output,
-        )
+    def test_zero_ip_addr(self):
+        self.cmd.addr = "0"
+        self.cmd._raw_ipv6 = False
+        self.cmd.on_bind("8000")
         self.assertIn(
             "Starting development server at http://0.0.0.0:8000/",
+            self.output.getvalue(),
+        )
+
+    def test_on_bind(self):
+        self.cmd.addr = "127.0.0.1"
+        self.cmd._raw_ipv6 = False
+        self.cmd.on_bind("14437")
+        self.assertIn(
+            "Starting development server at http://127.0.0.1:14437/",
             self.output.getvalue(),
         )
 
@@ -1895,10 +1902,16 @@ class CommandTypes(AdminScriptTestCase):
         ]
         for option in expected_options:
             self.assertOutput(out, f"[{option}]")
-        self.assertOutput(out, "--option_a OPTION_A, -a OPTION_A")
-        self.assertOutput(out, "--option_b OPTION_B, -b OPTION_B")
-        self.assertOutput(out, "--option_c OPTION_C, -c OPTION_C")
-        self.assertOutput(out, "-v {0,1,2,3}, --verbosity {0,1,2,3}")
+        if PY313:
+            self.assertOutput(out, "--option_a, -a OPTION_A")
+            self.assertOutput(out, "--option_b, -b OPTION_B")
+            self.assertOutput(out, "--option_c, -c OPTION_C")
+            self.assertOutput(out, "-v, --verbosity {0,1,2,3}")
+        else:
+            self.assertOutput(out, "--option_a OPTION_A, -a OPTION_A")
+            self.assertOutput(out, "--option_b OPTION_B, -b OPTION_B")
+            self.assertOutput(out, "--option_c OPTION_C, -c OPTION_C")
+            self.assertOutput(out, "-v {0,1,2,3}, --verbosity {0,1,2,3}")
 
     def test_color_style(self):
         style = color.no_style()
@@ -2288,6 +2301,35 @@ class Discovery(SimpleTestCase):
             self.assertEqual(out.getvalue().strip(), "simple_app")
 
 
+class CommandDBOptionChoiceTests(SimpleTestCase):
+    def test_invalid_choice_db_option(self):
+        expected_error = (
+            "Error: argument --database: invalid choice: "
+            "'deflaut' (choose from 'default', 'other')"
+        )
+        args = [
+            "changepassword",
+            "createsuperuser",
+            "remove_stale_contenttypes",
+            "check",
+            "createcachetable",
+            "dbshell",
+            "flush",
+            "dumpdata",
+            "inspectdb",
+            "loaddata",
+            "showmigrations",
+            "sqlflush",
+            "sqlmigrate",
+            "sqlsequencereset",
+            "migrate",
+        ]
+
+        for arg in args:
+            with self.assertRaisesMessage(CommandError, expected_error):
+                call_command(arg, "--database", "deflaut", verbosity=0)
+
+
 class ArgumentOrder(AdminScriptTestCase):
     """Tests for 2-stage argument parsing scheme.
 
@@ -2376,7 +2418,6 @@ class ExecuteFromCommandLine(SimpleTestCase):
 
 @override_settings(ROOT_URLCONF="admin_scripts.urls")
 class StartProject(LiveServerTestCase, AdminScriptTestCase):
-
     available_apps = [
         "admin_scripts",
         "django.contrib.auth",
@@ -2443,6 +2484,28 @@ class StartProject(LiveServerTestCase, AdminScriptTestCase):
             "Python module and cannot be used as a project name. Please try "
             "another name.",
         )
+        self.assertFalse(os.path.exists(testproject_dir))
+
+    def test_command_does_not_import(self):
+        """
+        startproject doesn't import modules (and cannot be fooled by a module
+        raising ImportError).
+        """
+        bad_name = "raises_import_error"
+        args = ["startproject", bad_name]
+        testproject_dir = os.path.join(self.test_dir, bad_name)
+
+        with open(os.path.join(self.test_dir, "raises_import_error.py"), "w") as f:
+            f.write("raise ImportError")
+
+        out, err = self.run_django_admin(args)
+        self.assertOutput(
+            err,
+            "CommandError: 'raises_import_error' conflicts with the name of an "
+            "existing Python module and cannot be used as a project name. Please try "
+            "another name.",
+        )
+        self.assertNoOutput(out)
         self.assertFalse(os.path.exists(testproject_dir))
 
     def test_simple_project_different_directory(self):

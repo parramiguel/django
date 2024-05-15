@@ -10,6 +10,7 @@ from django.contrib.admin.utils import (
 )
 from django.contrib.admin.views.main import (
     ALL_VAR,
+    IS_FACETS_VAR,
     IS_POPUP_VAR,
     ORDER_VAR,
     PAGE_VAR,
@@ -17,6 +18,7 @@ from django.contrib.admin.views.main import (
 )
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
 from django.template import Library
 from django.template.loader import get_template
 from django.templatetags.static import static
@@ -96,8 +98,12 @@ def result_headers(cl):
 
             # if the field is the action checkbox: no sorting and special class
             if field_name == "action_checkbox":
+                aria_label = _("Select all objects on this page for an action")
                 yield {
-                    "text": text,
+                    "text": mark_safe(
+                        f'<input type="checkbox" id="action-toggle" '
+                        f'aria-label="{aria_label}">'
+                    ),
                     "class_attrib": mark_safe(' class="action-checkbox-column"'),
                     "sortable": False,
                 }
@@ -107,7 +113,7 @@ def result_headers(cl):
             # Set ordering for attr that is a property, if defined.
             if isinstance(attr, property) and hasattr(attr, "fget"):
                 admin_order_field = getattr(attr.fget, "admin_order_field", None)
-            if not admin_order_field:
+            if not admin_order_field and LOOKUP_SEP not in field_name:
                 is_field_sortable = False
 
         if not is_field_sortable:
@@ -166,9 +172,9 @@ def result_headers(cl):
             "url_primary": cl.get_query_string({ORDER_VAR: ".".join(o_list_primary)}),
             "url_remove": cl.get_query_string({ORDER_VAR: ".".join(o_list_remove)}),
             "url_toggle": cl.get_query_string({ORDER_VAR: ".".join(o_list_toggle)}),
-            "class_attrib": format_html(' class="{}"', " ".join(th_classes))
-            if th_classes
-            else "",
+            "class_attrib": (
+                format_html(' class="{}"', " ".join(th_classes)) if th_classes else ""
+            ),
         }
 
 
@@ -220,6 +226,9 @@ def items_for_result(cl, result, form):
                 if field_name == "action_checkbox":
                     row_classes = ["action-checkbox"]
                 boolean = getattr(attr, "boolean", False)
+                # Set boolean for attr that is a property, if defined.
+                if isinstance(attr, property) and hasattr(attr, "fget"):
+                    boolean = getattr(attr.fget, "boolean", False)
                 result_repr = display_for_value(value, empty_value_display, boolean)
                 if isinstance(value, (datetime.date, datetime.time)):
                     row_classes.append("nowrap")
@@ -262,9 +271,11 @@ def items_for_result(cl, result, form):
                 link_or_text = format_html(
                     '<a href="{}"{}>{}</a>',
                     url,
-                    format_html(' data-popup-opener="{}"', value)
-                    if cl.is_popup
-                    else "",
+                    (
+                        format_html(' data-popup-opener="{}"', value)
+                        if cl.is_popup
+                        else ""
+                    ),
                     result_repr,
                 )
 
@@ -471,6 +482,7 @@ def search_form(cl):
         "show_result_count": cl.result_count != cl.full_result_count,
         "search_var": SEARCH_VAR,
         "is_popup_var": IS_POPUP_VAR,
+        "is_facets_var": IS_FACETS_VAR,
     }
 
 

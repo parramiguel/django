@@ -7,6 +7,7 @@
  support for an internal JVM, and Java libraries are required to use
  the WKT constructors.
 """
+
 import re
 
 from django.contrib.gis.db import models
@@ -54,7 +55,6 @@ class SDORelate(SpatialOperator):
 
 
 class OracleOperations(BaseSpatialOperations, DatabaseOperations):
-
     name = "oracle"
     oracle = True
     disallowed_aggregates = (models.Collect, models.Extent3D, models.MakeLine)

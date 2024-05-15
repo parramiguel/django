@@ -5,7 +5,7 @@ import posixpath
 import shutil
 import stat
 import tempfile
-from importlib import import_module
+from importlib.util import find_spec
 from urllib.request import build_opener
 
 import django
@@ -158,7 +158,6 @@ class TemplateCommand(BaseCommand):
         prefix_length = len(template_dir) + 1
 
         for root, dirs, files in os.walk(template_dir):
-
             path_rest = root[prefix_length:]
             relative_dir = path_rest.replace(base_name, name)
             if relative_dir:
@@ -276,12 +275,8 @@ class TemplateCommand(BaseCommand):
                     type=name_or_dir,
                 )
             )
-        # Check it cannot be imported.
-        try:
-            import_module(name)
-        except ImportError:
-            pass
-        else:
+        # Check that __spec__ doesn't exist.
+        if find_spec(name) is not None:
             raise CommandError(
                 "'{name}' conflicts with the name of an existing Python "
                 "module and cannot be used as {an} {app} {type}. Please try "
